@@ -51,7 +51,24 @@ See [QUICKSTART.md](./QUICKSTART.md) for more details.
 
 ## 🐳 Docker Deployment
 
-### Using Docker Compose (Recommended)
+### Railway (Recommended for beginners)
+
+**Easiest way to deploy!**
+
+1. Push to GitHub:
+   ```bash
+   git push origin main
+   ```
+
+2. Deploy on [Railway](https://railway.app):
+   - Click "New Project" → "Deploy from GitHub repo"
+   - Add PostgreSQL database
+   - Set environment variables
+   - Done! ✨
+
+See [RAILWAY.md](./RAILWAY.md) for detailed guide.
+
+### Using Docker Compose
 
 ```bash
 # Setup environment
