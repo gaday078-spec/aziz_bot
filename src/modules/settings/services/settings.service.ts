@@ -14,7 +14,7 @@ export class SettingsService {
           aboutBot: 'Bu kino bot',
           supportUsername: 'support',
           adminNotificationChat: '0',
-          welcomeMessage: 'Xush kelibsiz!',
+          welcomeMessage: '👋',
         },
       });
     }
@@ -46,6 +46,15 @@ export class SettingsService {
     return this.prisma.botSettings.update({
       where: { id: settings.id },
       data: { adminNotificationChat },
+    });
+  }
+
+  async updateContactMessage(contactMessage: string) {
+    const settings = await this.getSettings();
+
+    return this.prisma.botSettings.update({
+      where: { id: settings.id },
+      data: { contactMessage },
     });
   }
 

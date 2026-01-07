@@ -3,22 +3,13 @@ import { LanguageTexts } from '../../language/interfaces/language-texts.interfac
 
 export class MainMenuKeyboard {
   static getMainMenu(isPremium: boolean = false) {
-    const keyboard = new Keyboard()
-      .text("🔍 Kino kodi bo'yicha qidirish")
-      .row()
-      .text("📁 Field kanallariga o'tish")
-      .row();
+    const keyboard = new Keyboard().text("🔍 Kino kodi bo'yicha qidirish");
 
     if (!isPremium) {
-      keyboard.text('💎 Premium sotib olish').row();
+      keyboard.text('💎 Premium sotib olish');
     }
 
-    keyboard
-      .text('ℹ️ Bot haqida')
-      .text('👤 Profil')
-      .row()
-      .text('📞 Aloqa')
-      .text('⚙️ Sozlamalar');
+    keyboard.row().text('ℹ️ Bot haqida').text('📞 Aloqa');
 
     return { reply_markup: keyboard.resized() };
   }

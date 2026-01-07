@@ -11,7 +11,8 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
-
+droplet_2
+droplet_2.pub
 # OS
 .DS_Store
 

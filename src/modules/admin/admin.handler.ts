@@ -123,6 +123,18 @@ export class AdminHandler implements OnModuleInit {
       this.withAdminCheck(this.startAddMandatoryChannel.bind(this)),
     );
     bot.hears(
+      "📊 Tarixni ko'rish",
+      this.withAdminCheck(this.showChannelHistory.bind(this)),
+    );
+    bot.hears(
+      "📋 Hammasini ko'rish",
+      this.withAdminCheck(this.showAllChannelsHistory.bind(this)),
+    );
+    bot.hears(
+      "🔍 Link bo'yicha qidirish",
+      this.withAdminCheck(this.startSearchChannelByLink.bind(this)),
+    );
+    bot.hears(
       '💾 Database kanallar',
       this.withAdminCheck(this.showDatabaseChannels.bind(this)),
     );
@@ -201,6 +213,14 @@ export class AdminHandler implements OnModuleInit {
       if (admin) await this.deleteAdmin(ctx);
     });
 
+    bot.callbackQuery(
+      /^select_admin_role_(ADMIN|MANAGER|SUPERADMIN)_(.+)$/,
+      async (ctx) => {
+        const admin = await this.getAdmin(ctx);
+        if (admin) await this.handleRoleSelection(ctx);
+      },
+    );
+
     bot.callbackQuery('edit_prices', async (ctx) => {
       const admin = await this.getAdmin(ctx);
       if (admin) await this.startEditingPrices(ctx);
@@ -209,6 +229,11 @@ export class AdminHandler implements OnModuleInit {
     bot.callbackQuery('edit_card', async (ctx) => {
       const admin = await this.getAdmin(ctx);
       if (admin) await this.startEditingCard(ctx);
+    });
+
+    bot.callbackQuery('edit_contact', async (ctx) => {
+      const admin = await this.getAdmin(ctx);
+      if (admin) await this.startEditingContactMessage(ctx);
     });
 
     bot.callbackQuery('back_to_admin_menu', async (ctx) => {
@@ -539,13 +564,14 @@ export class AdminHandler implements OnModuleInit {
 
       // Create movie caption with button for field channel (DMC style)
       const caption = `
-${data.title}
-
-${data.description || ''}
-
-📖 Qism: ${data.episodeCount || 1}
-🎭 Janrlari: ${data.genre}
-🔖 Kanal: ${field.channelLink || '@' + field.name}
+╭────────────────────
+├‣  Kino nomi : ${data.title}
+├‣  Kino kodi: ${data.code}
+├‣  Qism: ${data.episodeCount || 1}
+├‣  Janrlari: ${data.genre}
+├‣  Kanal: ${field.channelLink || '@' + field.name}
+╰────────────────────
+▶️ Kinoning to'liq qismini https://t.me/${this.grammyBot.botUsername}?start=${data.code} dan tomosha qilishingiz mumkin!
       `.trim();
 
       const keyboard = new InlineKeyboard().url(
@@ -651,8 +677,14 @@ ${data.description || ''}
       case AdminState.EDIT_CARD_INFO:
         await this.handleCardEditingSteps(ctx, text, session);
         break;
+      case AdminState.EDIT_CONTACT_MESSAGE:
+        await this.handleContactMessageEditing(ctx, text, session);
+        break;
       case AdminState.BROADCASTING:
         await this.handleBroadcastMessage(ctx, text, session);
+        break;
+      case AdminState.SEARCH_CHANNEL_BY_LINK:
+        await this.searchChannelByLink(ctx, text);
         break;
       default:
         this.logger.warn(`Unhandled session state: ${session.state}`);
@@ -979,7 +1011,16 @@ ${data.description || ''}
     channels.forEach((ch, i) => {
       message += `${i + 1}. ${ch.channelName}\n`;
       message += `   Link: ${ch.channelLink}\n`;
-      message += `   ID: ${ch.channelId}\n\n`;
+      message += `   👥 A'zolar: ${ch.currentMembers}`;
+      if (ch.memberLimit) {
+        message += ` / ${ch.memberLimit}`;
+      } else {
+        message += ' (Limitsiz)';
+      }
+      if (ch.type === 'PRIVATE' && ch.pendingRequests > 0) {
+        message += `\n   ⏳ Kutilayotgan: ${ch.pendingRequests}`;
+      }
+      message += '\n\n';
     });
 
     const inlineKeyboard = new InlineKeyboard();
@@ -993,6 +1034,7 @@ ${data.description || ''}
 
     const keyboard = new Keyboard()
       .text("➕ Majburiy kanal qo'shish")
+      .text("📊 Tarixni ko'rish")
       .row()
       .text('🔙 Orqaga')
       .resized();
@@ -1037,6 +1079,168 @@ ${data.description || ''}
 
     await ctx.answerCallbackQuery({ text: '✅ Majburiy kanal ochirildi' });
     await this.showMandatoryChannels(ctx);
+  }
+
+  private async showChannelHistory(ctx: BotContext) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin) return;
+
+    const keyboard = new Keyboard()
+      .text("📋 Hammasini ko'rish")
+      .text("🔍 Link bo'yicha qidirish")
+      .row()
+      .text('🔙 Orqaga')
+      .resized();
+
+    await ctx.reply('📊 Majburiy kanallar tarixi:\n\n' + 'Tanlang:', {
+      reply_markup: keyboard,
+    });
+  }
+
+  private async showAllChannelsHistory(ctx: BotContext) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin) return;
+
+    const channels = await this.channelService.findAllWithHistory();
+
+    if (channels.length === 0) {
+      await ctx.reply(
+        '📊 Hech qanday kanal topilmadi.',
+        AdminKeyboard.getAdminMainMenu(admin.role),
+      );
+      return;
+    }
+
+    let message = '📊 <b>Majburiy kanallar tarixi:</b>\n\n';
+
+    const activeChannels = channels.filter((ch) => ch.isActive);
+    const inactiveChannels = channels.filter((ch) => !ch.isActive);
+
+    if (activeChannels.length > 0) {
+      message += '✅ <b>Faol kanallar:</b>\n\n';
+      activeChannels.forEach((ch, index) => {
+        message += `${index + 1}. <b>${ch.channelName}</b>\n`;
+        message += `   🔗 ${ch.channelLink}\n`;
+        message += `   📁 Turi: ${ch.type === 'PUBLIC' ? 'Public' : ch.type === 'PRIVATE' ? 'Private' : 'Boshqa'}\n`;
+        message += `   👥 A'zolar: ${ch.currentMembers}`;
+
+        if (ch.memberLimit) {
+          message += ` / ${ch.memberLimit}`;
+          const percentage = (
+            (ch.currentMembers / ch.memberLimit) *
+            100
+          ).toFixed(1);
+          message += ` (${percentage}%)`;
+        } else {
+          message += ' (Cheksiz)';
+        }
+
+        message += '\n';
+
+        if (ch.type === 'PRIVATE' && ch.pendingRequests > 0) {
+          message += `   ⏳ Kutilayotgan so'rovlar: ${ch.pendingRequests}\n`;
+        }
+
+        message += `   📅 Qo'shilgan: ${new Date(ch.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+      });
+    }
+
+    if (inactiveChannels.length > 0) {
+      message +=
+        "\n❌ <b>Nofaol kanallar (limit to'lgan yoki o'chirilgan):</b>\n\n";
+      inactiveChannels.forEach((ch, index) => {
+        message += `${index + 1}. <b>${ch.channelName}</b>\n`;
+        message += `   🔗 ${ch.channelLink}\n`;
+        message += `   📁 Turi: ${ch.type === 'PUBLIC' ? 'Public' : ch.type === 'PRIVATE' ? 'Private' : 'Boshqa'}\n`;
+        message += `   👥 Jami qo'shilganlar: ${ch.currentMembers}`;
+
+        if (ch.memberLimit) {
+          message += ` / ${ch.memberLimit}`;
+        }
+
+        message += '\n';
+        message += `   📅 Qo'shilgan: ${new Date(ch.createdAt).toLocaleDateString('uz-UZ')}\n\n`;
+      });
+    }
+
+    const keyboard = new Keyboard()
+      .text("🔍 Link bo'yicha qidirish")
+      .row()
+      .text('🔙 Orqaga')
+      .resized();
+
+    await ctx.reply(message, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+    });
+  }
+
+  private async startSearchChannelByLink(ctx: BotContext) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin || !ctx.from) return;
+
+    await this.sessionService.startSession(
+      Number(admin.telegramId),
+      AdminState.SEARCH_CHANNEL_BY_LINK,
+    );
+
+    const keyboard = new Keyboard().text('❌ Bekor qilish').resized();
+
+    await ctx.reply(
+      '🔍 Kanal linkini yuboring:\n\n' +
+        'Misol: https://t.me/mychannel\n\n' +
+        "❌ Bekor qilish uchun 'Bekor qilish' tugmasini bosing",
+      { reply_markup: keyboard },
+    );
+  }
+
+  private async searchChannelByLink(ctx: BotContext, link: string) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin) return;
+
+    const channel = await this.channelService.findByLink(link);
+
+    if (!channel) {
+      await ctx.reply(
+        "❌ Bunday link bilan kanal topilmadi.\n\nIltimos, to'g'ri link yuboring.",
+        AdminKeyboard.getCancelButton(),
+      );
+      return;
+    }
+
+    this.sessionService.clearSession(ctx.from!.id);
+
+    let message = `📊 <b>Kanal ma'lumotlari:</b>\n\n`;
+    message += `📢 <b>${channel.channelName}</b>\n`;
+    message += `🔗 ${channel.channelLink}\n`;
+    message += `📁 Turi: ${channel.type === 'PUBLIC' ? 'Public' : channel.type === 'PRIVATE' ? 'Private' : 'Boshqa'}\n`;
+    message += `📊 Holat: ${channel.isActive ? '✅ Faol' : '❌ Nofaol'}\n`;
+    message += `👥 A'zolar: ${channel.currentMembers}`;
+
+    if (channel.memberLimit) {
+      message += ` / ${channel.memberLimit}`;
+      const percentage = (
+        (channel.currentMembers / channel.memberLimit) *
+        100
+      ).toFixed(1);
+      message += ` (${percentage}%)`;
+    } else {
+      message += ' (Cheksiz)';
+    }
+
+    message += '\n';
+
+    if (channel.type === 'PRIVATE' && channel.pendingRequests > 0) {
+      message += `⏳ Kutilayotgan so'rovlar: ${channel.pendingRequests}\n`;
+    }
+
+    message += `📅 Qo'shilgan: ${new Date(channel.createdAt).toLocaleDateString('uz-UZ')}\n`;
+
+    await ctx.reply(message, {
+      parse_mode: 'HTML',
+    });
+
+    await ctx.reply('Tanlang:', AdminKeyboard.getAdminMainMenu(admin.role));
   }
 
   private async showDatabaseChannels(ctx: BotContext) {
@@ -1254,6 +1458,77 @@ ${data.description || ''}
     await this.showAdminsList(ctx);
   }
 
+  private async handleRoleSelection(ctx: BotContext) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin || admin.role !== 'SUPERADMIN') {
+      await ctx.answerCallbackQuery({
+        text: "❌ Sizda admin qo'shish huquqi yo'q.",
+      });
+      return;
+    }
+
+    // Extract role and telegramId from callback data: select_admin_role_ROLE_telegramId
+    const match = ctx.callbackQuery!.data!.match(
+      /^select_admin_role_(ADMIN|MANAGER|SUPERADMIN)_(.+)$/,
+    );
+    if (!match) {
+      await ctx.answerCallbackQuery({ text: "❌ Noto'g'ri ma'lumot" });
+      return;
+    }
+
+    const role = match[1] as 'ADMIN' | 'MANAGER' | 'SUPERADMIN';
+    const telegramId = match[2];
+
+    // Retrieve session data
+    const session = this.sessionService.getSession(ctx.from.id);
+    const username = session?.data?.username || telegramId;
+
+    try {
+      // Create admin with selected role
+      await this.adminService.createAdmin({
+        telegramId,
+        username,
+        role,
+        createdBy: ctx.from.id.toString(),
+      });
+
+      // Clear session
+      this.sessionService.clearSession(ctx.from.id);
+
+      // Show success message
+      const roleNames = {
+        ADMIN: '👥 Admin',
+        MANAGER: '👨‍💼 Manager',
+        SUPERADMIN: '👑 SuperAdmin',
+      };
+
+      await ctx.editMessageText(
+        `✅ *${roleNames[role]} muvaffaqiyatli qo'shildi!*\n\n` +
+          `👤 Foydalanuvchi: @${username}\n` +
+          `🆔 Telegram ID: \`${telegramId}\`\n` +
+          `📋 Rol: ${roleNames[role]}`,
+        { parse_mode: 'Markdown' },
+      );
+
+      await ctx.answerCallbackQuery({ text: "✅ Admin qo'shildi!" });
+
+      // Return to admin management
+      setTimeout(() => {
+        this.showAdminsList(ctx);
+      }, 2000);
+    } catch (error) {
+      await ctx.answerCallbackQuery({
+        text: "❌ Xatolik yuz berdi. Iltimos, qayta urinib ko'ring.",
+      });
+
+      await ctx.reply(`❌ Admin qo'shishda xatolik:\n${error.message}`, {
+        parse_mode: 'Markdown',
+      });
+
+      this.sessionService.clearSession(ctx.from.id);
+    }
+  }
+
   // ==================== SETTINGS ====================
   private async showSettings(ctx: BotContext) {
     const admin = await this.getAdmin(ctx);
@@ -1287,6 +1562,8 @@ ${data.description || ''}
       .text("💰 Narxlarni o'zgartirish", 'edit_prices')
       .row()
       .text("💳 Karta ma'lumotlarini o'zgartirish", 'edit_card')
+      .row()
+      .text("📞 Aloqa bo'limini tahrirlash", 'edit_contact')
       .row()
       .text('🔙 Orqaga', 'back_to_admin_menu');
 
@@ -1344,6 +1621,76 @@ ${data.description || ''}
       { reply_markup: keyboard },
     );
     await ctx.answerCallbackQuery();
+  }
+
+  private async startEditingContactMessage(ctx: BotContext) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin || admin.role !== 'SUPERADMIN') {
+      await ctx.answerCallbackQuery({ text: "❌ Ruxsat yo'q" });
+      return;
+    }
+
+    if (!ctx.from) return;
+
+    await this.sessionService.startSession(
+      ctx.from.id,
+      AdminState.EDIT_CONTACT_MESSAGE,
+    );
+
+    const settings = await this.settingsService.getSettings();
+    const currentMessage =
+      settings.contactMessage || 'Hozircha matn kiritilmagan';
+
+    const keyboard = new Keyboard().text('❌ Bekor qilish').resized();
+
+    await ctx.reply(
+      `📞 **Aloqa bo'limi matnini kiriting:**\n\n` +
+        `Hozirgi matn:\n${currentMessage}\n\n` +
+        `Yangi matnni yuboring (Markdown formatida):\n` +
+        `Masalan:\n` +
+        `📞 **Aloqa**\\n\\n` +
+        `Savollaringiz bo'lsa murojaat qiling:\\n` +
+        `👤 Admin: @username\\n` +
+        `📱 Telefon: +998901234567\n\n` +
+        "❌ Bekor qilish uchun 'Bekor qilish' tugmasini bosing",
+      {
+        reply_markup: keyboard,
+        parse_mode: 'Markdown',
+      },
+    );
+    await ctx.answerCallbackQuery();
+  }
+
+  private async handleContactMessageEditing(
+    ctx: BotContext,
+    text: string,
+    session: any,
+  ) {
+    const admin = await this.getAdmin(ctx);
+    if (!admin || !ctx.from) return;
+
+    try {
+      // Update contact message in database
+      await this.settingsService.updateContactMessage(text);
+
+      this.sessionService.clearSession(ctx.from.id);
+
+      await ctx.reply(
+        "✅ Aloqa bo'limi matni muvaffaqiyatli yangilandi!\n\n" +
+          'Userlar endi "📞 Aloqa" tugmasini bosganida yangi matnni ko\'rishadi.',
+        AdminKeyboard.getAdminMainMenu(admin.role),
+      );
+
+      this.logger.log(
+        `[handleContactMessageEditing] Admin ${admin.telegramId} updated contact message`,
+      );
+    } catch (error) {
+      this.logger.error('Error updating contact message:', error);
+      await ctx.reply(
+        "❌ Xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
+        AdminKeyboard.getCancelButton(),
+      );
+    }
   }
 
   private async backToAdminMenu(ctx: BotContext) {
@@ -1585,7 +1932,7 @@ Qaysi guruhga xabar yubormoqchisiz?
           this.sessionService.updateSessionData(ctx.from.id, { channelType });
           this.sessionService.nextStep(ctx.from.id);
           await ctx.reply(
-            '🆔 Kanal ID sini yoki @username ni yuboring:\n\nMasalan:\n- -1001234567890 (ID)\n- @mychannel (username)',
+            '🔗 Kanal linkini yuboring:\n\nMasalan: https://t.me/mychannel',
             AdminKeyboard.getCancelButton(),
           );
         } else if (text === '🔒 Private kanal') {
@@ -1593,136 +1940,322 @@ Qaysi guruhga xabar yubormoqchisiz?
           this.sessionService.updateSessionData(ctx.from.id, { channelType });
           this.sessionService.nextStep(ctx.from.id);
           await ctx.reply(
-            "🆔 Kanal ID sini yuboring:\n\nKanal ID '-' belgisi bilan boshlanishi kerak.\nMasalan: -1001234567890",
+            '🔗 Kanal invite linkini yuboring:\n\nMasalan: https://t.me/+abc123xyz',
             AdminKeyboard.getCancelButton(),
           );
         } else if (text === '🔗 Boshqa link') {
           channelType = ChannelType.EXTERNAL;
           this.sessionService.updateSessionData(ctx.from.id, { channelType });
-          this.sessionService.nextStep(ctx.from.id);
-          this.sessionService.nextStep(ctx.from.id); // Skip step 1
+          // Skip Step 1 (ID verification) for external channels - they don't need Telegram ID
+          this.sessionService.nextStep(ctx.from.id); // Go to step 1
+          this.sessionService.nextStep(ctx.from.id); // Then skip to step 2
           await ctx.reply(
-            '📝 Kanal/Guruh nomini kiriting:\n\nMasalan: Instagram Sahifa',
+            '📝 Kanal/Guruh nomini kiriting:\n\nMasalan: Instagram Sahifam, YouTube Kanal',
             AdminKeyboard.getCancelButton(),
           );
         }
         break;
 
-      case 1: // Channel ID/Username (for PUBLIC/PRIVATE only)
-        const channelIdOrUsername = text.trim();
+      case 1: // Channel link (for PUBLIC/PRIVATE)
+        const channelLink = text.trim();
         const data = session.data;
 
-        if (data.channelType === ChannelType.PUBLIC) {
-          // Validate public channel
-          if (
-            !channelIdOrUsername.startsWith('-') &&
-            !channelIdOrUsername.startsWith('@')
-          ) {
+        // Check if we're waiting for private channel ID
+        if (data.waitingForPrivateChannelId) {
+          // Validate ID format
+          if (!channelLink.startsWith('-')) {
             await ctx.reply(
-              "❌ Noto'g'ri format!\n\nKanal ID yoki username kiriting.\nMasalan: -1001234567890 yoki @mychannel",
+              "❌ Kanal ID noto'g'ri formatda!\n\n" +
+                "Kanal ID '-' belgisi bilan boshlanishi kerak.\n" +
+                'Masalan: -1001234567890',
               AdminKeyboard.getCancelButton(),
             );
             return;
           }
-        } else if (data.channelType === ChannelType.PRIVATE) {
-          // Validate private channel ID
-          if (!channelIdOrUsername.startsWith('-')) {
+
+          try {
+            // Verify channel exists and bot is admin
+            const chat = await ctx.api.getChat(channelLink);
+            const botMember = await ctx.api.getChatMember(
+              channelLink,
+              ctx.me.id,
+            );
+
+            if (
+              botMember.status !== 'administrator' &&
+              botMember.status !== 'creator'
+            ) {
+              await ctx.reply(
+                '❌ Bot kanalda admin emas!\n\n' +
+                  "Iltimos, botni kanalga admin qiling va qayta urinib ko'ring.",
+                AdminKeyboard.getCancelButton(),
+              );
+              return;
+            }
+
+            const channelName = 'title' in chat ? chat.title : channelLink;
+
+            this.sessionService.updateSessionData(ctx.from.id, {
+              channelId: channelLink,
+              channelName,
+              waitingForPrivateChannelId: false,
+            });
+
+            this.sessionService.nextStep(ctx.from.id);
+
+            const keyboard = new Keyboard()
+              .text('♾️ Cheksiz')
+              .text('🔢 Limitli')
+              .row()
+              .text('❌ Bekor qilish')
+              .resized();
+
             await ctx.reply(
-              "❌ Kanal ID noto'g'ri formatda!\n\nKanal ID '-' belgisi bilan boshlanishi kerak.\nMasalan: -1001234567890",
+              '🔢 Kanal uchun limitni tanlang:\n\n' +
+                "♾️ Cheksiz - Kanal doim majburiy bo'ladi (admin o'chirmaguncha)\n" +
+                "🔢 Limitli - Ma'lum sondagi a'zolar qo'shilgandan keyin avtomatik o'chiriladi\n\n" +
+                'Tanlang:',
+              { reply_markup: keyboard },
+            );
+          } catch (error) {
+            this.logger.error('Failed to verify private channel', error);
+            await ctx.reply(
+              '❌ Kanal topilmadi yoki bot admin emas!\n\n' +
+                '✅ Botning kanalda admin ekanligiga ishonch hosil qiling.\n' +
+                "✅ Kanal ID to'g'ri ekanligiga ishonch hosil qiling.",
               AdminKeyboard.getCancelButton(),
             );
-            return;
           }
+          return;
         }
 
-        this.sessionService.updateSessionData(ctx.from.id, {
-          channelId: channelIdOrUsername,
-        });
+        // Validate link format
+        if (!channelLink.startsWith('https://t.me/')) {
+          await ctx.reply(
+            "❌ Link noto'g'ri formatda!\n\nLink 'https://t.me/' bilan boshlanishi kerak.\nMasalan: https://t.me/mychannel yoki https://t.me/+abc123",
+            AdminKeyboard.getCancelButton(),
+          );
+          return;
+        }
+
+        // Verify channel and get info
+        try {
+          let channelId: string;
+          let channelName: string;
+
+          if (
+            channelLink.includes('/+') ||
+            channelLink.includes('/joinchat/')
+          ) {
+            // PRIVATE channel - can't validate via link alone
+            // Ask for channel ID directly
+            await ctx.reply(
+              "🔒 Private kanal uchun ID kerak bo'ladi.\n\n" +
+                '📱 Kanal ID sini olish uchun:\n' +
+                '1️⃣ Kanalga @userinfobot ni admin qiling\n' +
+                '2️⃣ Kanalda biror xabar yuboring\n' +
+                '3️⃣ Bot sizga kanal ID sini beradi\n\n' +
+                '🆔 Kanal ID sini yuboring:\n' +
+                'Masalan: -1001234567890',
+              AdminKeyboard.getCancelButton(),
+            );
+            // Save the link but wait for ID
+            this.sessionService.updateSessionData(ctx.from.id, {
+              channelLink,
+              waitingForPrivateChannelId: true,
+            });
+            return; // Stay on step 1
+          } else {
+            // PUBLIC channel - extract username and validate
+            const username = channelLink.split('/').pop();
+            if (!username) {
+              await ctx.reply(
+                "❌ Link noto'g'ri formatda!",
+                AdminKeyboard.getCancelButton(),
+              );
+              return;
+            }
+
+            const channelIdentifier = username.startsWith('@')
+              ? username
+              : `@${username}`;
+
+            // Get channel info
+            const chat = await ctx.api.getChat(channelIdentifier);
+            channelId = String(chat.id);
+            channelName = 'title' in chat ? chat.title : channelIdentifier;
+
+            // Verify bot is admin
+            const botMember = await ctx.api.getChatMember(channelId, ctx.me.id);
+            if (
+              botMember.status !== 'administrator' &&
+              botMember.status !== 'creator'
+            ) {
+              await ctx.reply(
+                '❌ Bot kanalda admin emas!\n\n' +
+                  "Iltimos, botni kanalga admin qiling va qayta urinib ko'ring.",
+                AdminKeyboard.getCancelButton(),
+              );
+              return;
+            }
+
+            this.sessionService.updateSessionData(ctx.from.id, {
+              channelId,
+              channelName,
+              channelLink,
+            });
+          }
+        } catch (error) {
+          this.logger.error('Failed to get channel info', error);
+          await ctx.reply(
+            '❌ Kanal topilmadi yoki bot admin emas!\n\n' +
+              '✅ Botning kanalda admin ekanligiga ishonch hosil qiling.\n' +
+              "✅ Kanal linki to'g'ri ekanligiga ishonch hosil qiling.",
+            AdminKeyboard.getCancelButton(),
+          );
+          return;
+        }
+
         this.sessionService.nextStep(ctx.from.id);
+
+        const keyboard = new Keyboard()
+          .text('♾️ Cheksiz')
+          .text('🔢 Limitli')
+          .row()
+          .text('❌ Bekor qilish')
+          .resized();
+
         await ctx.reply(
-          '🔗 Kanal linkini yuboring:\n\nMasalan: https://t.me/joinchat/abcd1234',
-          AdminKeyboard.getCancelButton(),
+          '🔢 Kanal uchun limitni tanlang:\n\n' +
+            "♾️ Cheksiz - Kanal doim majburiy bo'ladi (admin o'chirmaguncha)\n" +
+            "🔢 Limitli - Ma'lum sondagi a'zolar qo'shilgandan keyin avtomatik o'chiriladi\n\n" +
+            'Tanlang:',
+          { reply_markup: keyboard },
         );
         break;
 
-      case 2: // Channel name (EXTERNAL) or link (PUBLIC/PRIVATE)
+      case 2: // Limit selection (PUBLIC/PRIVATE) or External name
         const input = text.trim();
         const sessionData = session.data;
 
         if (sessionData.channelType === ChannelType.EXTERNAL) {
-          // For EXTERNAL, this is the channel name
+          // For EXTERNAL channels (Instagram, Facebook, etc.)
+          // No ID verification needed - these are not Telegram channels
           this.sessionService.updateSessionData(ctx.from.id, {
             channelName: input,
           });
           this.sessionService.nextStep(ctx.from.id);
           await ctx.reply(
-            '🔗 Linkni yuboring:\n\nMasalan:\n- https://instagram.com/username\n- https://youtube.com/@channel',
+            '🔗 Linkni yuboring:\n\nMasalan:\n- https://instagram.com/username\n- https://youtube.com/@channel\n- https://facebook.com/page',
             AdminKeyboard.getCancelButton(),
           );
         } else {
-          // For PUBLIC/PRIVATE, this is the link
-          const channelLink = input;
-
-          try {
-            // Get channel info
-            const chat = await ctx.api.getChat(sessionData.channelId);
-            const channelName =
-              'title' in chat ? chat.title : sessionData.channelId;
-
-            await this.channelService.createMandatoryChannel({
-              channelId: sessionData.channelId,
-              channelName,
-              channelLink,
-              type: sessionData.channelType,
-              isActive: true,
-            });
-
-            this.sessionService.clearSession(ctx.from.id);
+          // For PUBLIC/PRIVATE, handle limit selection
+          if (input === '♾️ Cheksiz') {
+            // Create channel with no limit
+            await this.createChannelWithLimit(ctx, admin, sessionData, null);
+          } else if (input === '🔢 Limitli') {
+            // Ask for limit number
+            this.sessionService.nextStep(ctx.from.id);
             await ctx.reply(
-              `✅ Majburiy kanal muvaffaqiyatli qo'shildi!\n\n` +
-                `📢 ${channelName}\n` +
-                `🔗 ${channelLink}\n` +
-                `📁 Turi: ${sessionData.channelType === 'PUBLIC' ? 'Public kanal' : 'Private kanal'}`,
-              AdminKeyboard.getAdminMainMenu(admin.role),
+              "🔢 Nechta a'zo qo'shilgandan keyin kanal o'chirilsin?\n\n" +
+                'Masalan: 1000\n\n' +
+                'Faqat raqam kiriting:',
+              AdminKeyboard.getCancelButton(),
             );
-          } catch (error) {
-            this.logger.error('Failed to create mandatory channel', error);
+          } else {
             await ctx.reply(
-              "❌ Kanal qo'shishda xatolik yuz berdi.\n\nBotning kanalda admin ekanligiga ishonch hosil qiling va qaytadan urinib ko'ring.",
+              "❌ Noto'g'ri tanlov! Tugmalardan birini bosing.",
               AdminKeyboard.getCancelButton(),
             );
           }
         }
         break;
 
-      case 3: // Link for EXTERNAL type
-        const externalLink = text.trim();
-        const extData = session.data;
+      case 3: // External link or Limit number (PUBLIC/PRIVATE)
+        const step3Input = text.trim();
+        const step3Data = session.data;
 
-        try {
-          await this.channelService.createMandatoryChannel({
-            channelName: extData.channelName,
-            channelLink: externalLink,
-            type: ChannelType.EXTERNAL,
-            isActive: true,
-          });
+        if (step3Data.channelType === ChannelType.EXTERNAL) {
+          // For EXTERNAL, this is the link
+          try {
+            await this.channelService.createMandatoryChannel({
+              channelId: step3Input, // Use link as ID for external channels
+              channelName: step3Data.channelName,
+              channelLink: step3Input,
+              type: ChannelType.EXTERNAL,
+              isActive: true,
+              memberLimit: null,
+            });
 
-          this.sessionService.clearSession(ctx.from.id);
-          await ctx.reply(
-            `✅ Tashqi link muvaffaqiyatli qo'shildi!\n\n` +
-              `📢 ${extData.channelName}\n` +
-              `🔗 ${externalLink}\n` +
-              `📁 Turi: Tashqi link`,
-            AdminKeyboard.getAdminMainMenu(admin.role),
-          );
-        } catch (error) {
-          this.logger.error('Failed to create external channel', error);
-          await ctx.reply(
-            "❌ Link qo'shishda xatolik yuz berdi.\n\nIltimos, qaytadan urinib ko'ring.",
-            AdminKeyboard.getCancelButton(),
-          );
+            this.sessionService.clearSession(ctx.from.id);
+            await ctx.reply(
+              `✅ Tashqi link muvaffaqiyatli qo'shildi!\n\n` +
+                `📢 ${step3Data.channelName}\n` +
+                `🔗 ${step3Input}\n` +
+                `📁 Turi: Tashqi link`,
+              AdminKeyboard.getAdminMainMenu(admin.role),
+            );
+          } catch (error) {
+            this.logger.error('Failed to create external channel', error);
+            await ctx.reply(
+              '❌ Xatolik yuz berdi.',
+              AdminKeyboard.getCancelButton(),
+            );
+          }
+        } else {
+          // For PUBLIC/PRIVATE, this is the limit number
+          const limitNumber = parseInt(step3Input);
+          if (isNaN(limitNumber) || limitNumber <= 0) {
+            await ctx.reply(
+              "❌ Noto'g'ri format! Musbat son kiriting.\n\nMasalan: 1000",
+              AdminKeyboard.getCancelButton(),
+            );
+            return;
+          }
+
+          await this.createChannelWithLimit(ctx, admin, step3Data, limitNumber);
         }
         break;
+    }
+  }
+
+  private async createChannelWithLimit(
+    ctx: BotContext,
+    admin: any,
+    data: any,
+    memberLimit: number | null,
+  ) {
+    try {
+      // Channel ID and name already verified and saved in session
+      await this.channelService.createMandatoryChannel({
+        channelId: data.channelId,
+        channelName: data.channelName,
+        channelLink: data.channelLink,
+        type: data.channelType,
+        isActive: true,
+        memberLimit,
+      });
+
+      this.sessionService.clearSession(ctx.from!.id);
+
+      const limitText =
+        memberLimit === null ? 'Cheksiz' : `Limit: ${memberLimit} ta a'zo`;
+
+      await ctx.reply(
+        `✅ Majburiy kanal muvaffaqiyatli qo'shildi!\n\n` +
+          `📢 ${data.channelName}\n` +
+          `🔗 ${data.channelLink}\n` +
+          `📁 Turi: ${data.channelType === 'PUBLIC' ? 'Public kanal' : 'Private kanal'}\n` +
+          `🔢 ${limitText}`,
+        AdminKeyboard.getAdminMainMenu(admin.role),
+      );
+    } catch (error) {
+      this.logger.error('Failed to create mandatory channel', error);
+      await ctx.reply(
+        "❌ Kanal qo'shishda xatolik yuz berdi.\n\nBotning kanalda admin ekanligiga ishonch hosil qiling.",
+        AdminKeyboard.getCancelButton(),
+      );
     }
   }
 
@@ -1741,22 +2274,58 @@ Qaysi guruhga xabar yubormoqchisiz?
       const user = await ctx.api.getChat(telegramId);
       const username = 'username' in user ? user.username : undefined;
 
-      await this.adminService.createAdmin({
+      // Save user data in session
+      this.sessionService.updateSessionData(ctx.from.id, {
         telegramId,
         username: username || telegramId,
-        role: 'ADMIN',
-        createdBy: admin.telegramId,
       });
 
-      this.sessionService.clearSession(ctx.from.id);
-      await ctx.reply(
-        `✅ Admin muvaffaqiyatli qo'shildi!\n\n👤 ${username ? '@' + username : telegramId}\n🆔 ${telegramId}`,
-        AdminKeyboard.getAdminMainMenu(admin.role),
-      );
+      // Show role selection with descriptions
+      const message = `
+👤 **Admin qo'shish**
+
+✅ Foydalanuvchi topildi:
+🆔 ${username ? '@' + username : telegramId}
+🆔 ID: ${telegramId}
+
+💼 **Rol tanlang:**
+
+👥 **ADMIN**
+├ Kino va serial yuklash
+├ Statistikani ko'rish
+└ Fieldlarni boshqarish
+
+👨‍💼 **MANAGER**
+├ Admin qila oladigan barcha narsa
+├ Majburiy kanallar boshqarish
+├ Database kanallar boshqarish
+└ To'lovlarni boshqarish
+
+👑 **SUPERADMIN**
+├ Manager qila oladigan barcha narsa
+├ Adminlar boshqarish
+├ Reklama yuborish
+├ Bot sozlamalari
+└ To'liq nazorat
+
+Qaysi rol berasiz?
+      `.trim();
+
+      const keyboard = new InlineKeyboard()
+        .text('👥 Admin', `select_admin_role_ADMIN_${telegramId}`)
+        .row()
+        .text('👨‍💼 Manager', `select_admin_role_MANAGER_${telegramId}`)
+        .row()
+        .text('👑 SuperAdmin', `select_admin_role_SUPERADMIN_${telegramId}`);
+
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard,
+      });
     } catch (error) {
-      this.logger.error('Failed to create admin', error);
+      this.logger.error('Failed to get user info', error);
       await ctx.reply(
-        "❌ Admin qo'shishda xatolik yuz berdi.\n\nIltimos, to'g'ri Telegram ID kiriting.",
+        "❌ Foydalanuvchi topilmadi yoki xatolik yuz berdi.\n\nIltimos, to'g'ri Telegram ID kiriting.",
         AdminKeyboard.getCancelButton(),
       );
     }

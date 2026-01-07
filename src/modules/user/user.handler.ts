@@ -45,12 +45,9 @@ export class UserHandler implements OnModuleInit {
 
     // Main menu buttons
     bot.hears("🔍 Kino kodi bo'yicha qidirish", this.handleSearch.bind(this));
-    bot.hears("📁 Field kanallariga o'tish", this.showFieldChannels.bind(this));
     bot.hears('💎 Premium sotib olish', this.showPremium.bind(this));
     bot.hears('ℹ️ Bot haqida', this.showAbout.bind(this));
-    bot.hears('👤 Profil', this.showProfile.bind(this));
     bot.hears('📞 Aloqa', this.showContact.bind(this));
-    bot.hears('⚙️ Sozlamalar', this.showSettings.bind(this));
 
     // Callback query handlers
     bot.callbackQuery(/^movie_\d+$/, this.handleMovieCallback.bind(this));
@@ -67,6 +64,7 @@ export class UserHandler implements OnModuleInit {
       /^check_subscription$/,
       this.handleCheckSubscription.bind(this),
     );
+    bot.callbackQuery(/^show_premium$/, this.showPremium.bind(this));
     bot.callbackQuery(
       /^buy_premium_(\d+)$/,
       this.handlePremiumPurchase.bind(this),
@@ -82,6 +80,9 @@ export class UserHandler implements OnModuleInit {
 
     // Handle text messages (for code search)
     bot.on('message:text', this.handleTextMessage.bind(this));
+
+    // Handle chat join requests (for private channels)
+    bot.on('chat_join_request', this.handleJoinRequest.bind(this));
   }
 
   // ==================== START COMMAND ====================
@@ -103,21 +104,18 @@ export class UserHandler implements OnModuleInit {
     const premiumStatus = await this.premiumService.checkPremiumStatus(user.id);
     const isPremium = premiumStatus.isPremium && !premiumStatus.isExpired;
 
+    // Check mandatory channels subscription FIRST (for all users, new and old)
+    if (!isPremium) {
+      const hasSubscription = await this.checkSubscription(ctx, 0, 'start');
+      if (!hasSubscription) return; // Will show mandatory channels
+    }
+
     // Handle deep link (start=123 for movie or start=s123 for serial)
     if (typeof payload === 'string' && payload.length > 0) {
       // Check if it's a serial (starts with 's')
       if (payload.startsWith('s')) {
         const code = parseInt(payload.substring(1));
         if (!isNaN(code)) {
-          // Check subscription first
-          if (!isPremium) {
-            const hasSubscription = await this.checkSubscription(
-              ctx,
-              code,
-              'serial',
-            );
-            if (!hasSubscription) return;
-          }
           await this.sendSerialToUser(ctx, code);
           return;
         }
@@ -125,15 +123,6 @@ export class UserHandler implements OnModuleInit {
         // It's a movie (just the code number)
         const code = parseInt(payload);
         if (!isNaN(code)) {
-          // Check subscription first
-          if (!isPremium) {
-            const hasSubscription = await this.checkSubscription(
-              ctx,
-              code,
-              'movie',
-            );
-            if (!hasSubscription) return;
-          }
           await this.sendMovieToUser(ctx, code);
           return;
         }
@@ -141,20 +130,10 @@ export class UserHandler implements OnModuleInit {
     }
 
     // Show welcome message
-    const settings = await this.settingsService.getSettings();
     const welcomeMessage =
-      settings?.welcomeMessage ||
-      `
-👋 Xush kelibsiz, ${ctx.from.first_name}!
+      `👋 Assalomu alaykum, ${ctx.from.first_name} botimizga xush kelibsiz.
 
-🎬 **Film botiga xush kelibsiz!**
-
-Bu yerda minglab kino va seriallarni ko'rishingiz mumkin.
-
-🔍 Kinoni topish uchun:
-• Kino kodini yuboring (masalan: 12345)
-• Yoki menyudan tanlov qiling
-    `.trim();
+✍🏻 Kino kodini yuboring.`.trim();
 
     await ctx.reply(welcomeMessage, MainMenuKeyboard.getMainMenu(isPremium));
   }
@@ -199,29 +178,44 @@ Bu yerda minglab kino va seriallarni ko'rishingiz mumkin.
 
   // ==================== BOT HAQIDA ====================
   private async showAbout(ctx: BotContext) {
-    const settings = await this.settingsService.getSettings();
+    const fields = await this.fieldService.findAll();
 
-    const aboutText =
-      settings?.aboutBot ||
-      `
-ℹ️ **Bot haqida**
+    if (fields.length === 0) {
+      await ctx.reply(
+        'ℹ️ **Bot haqida**\n\n' +
+          'Bu bot orqali minglab kino va seriallarni tomosha qilishingiz mumkin.\n\n' +
+          '🎬 Kino va seriallar har kuni yangilanadi\n' +
+          '📱 Mobil va kompyuterda ishlaydi\n' +
+          "💎 Premium obuna bilan reklama yo'q\n\n" +
+          "❌ Hozircha field kanallar yo'q.",
+        { parse_mode: 'Markdown' },
+      );
+      return;
+    }
 
-Bu bot orqali minglab kino va seriallarni tomosha qilishingiz mumkin.
+    let message = 'ℹ️ **Bot haqida**\n\n';
+    message +=
+      'Bu bot orqali minglab kino va seriallarni tomosha qilishingiz mumkin.\n\n';
+    message += "📁 **Field kanallar ro'yxati:**\n\n";
 
-🎬 Kino va seriallar har kuni yangilanadi
-📱 Mobil va kompyuterda ishlaydi
-💎 Premium obuna bilan reklama yo'q
+    const keyboard = new InlineKeyboard();
+    let buttonsInRow = 0;
 
-Botdan foydalanish uchun:
-1. Kino kodini kiriting
-2. Yoki field kanallariga o'ting
-3. Kino rasmini bosing va "Tomosha qilish" tugmasini bosing
+    fields.forEach((field, index) => {
+      message += `${index + 1}. ${field.name}\n`;
+      keyboard.text(`${index + 1}`, `field_channel_${field.id}`);
+      buttonsInRow++;
 
-Savol va takliflar uchun:
-📞 ${settings?.supportUsername || '@admin'}
-    `.trim();
+      if (buttonsInRow === 5) {
+        keyboard.row();
+        buttonsInRow = 0;
+      }
+    });
 
-    await ctx.reply(aboutText, { parse_mode: 'Markdown' });
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard,
+    });
   }
 
   // ==================== FIELD KANALLARGA O'TISH ====================
@@ -290,6 +284,11 @@ Savol va takliflar uchun:
 
   // ==================== PREMIUM ====================
   private async showPremium(ctx: BotContext) {
+    // Handle callback query if it exists
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery();
+    }
+
     const premiumSettings = await this.premiumService.getSettings();
 
     const message = `
@@ -317,10 +316,17 @@ Qaysi muddatga obuna bo'lmoqchisiz?
       .text('6 oy', 'buy_premium_6')
       .text('1 yil', 'buy_premium_12');
 
-    await ctx.reply(message, {
-      parse_mode: 'Markdown',
-      reply_markup: keyboard,
-    });
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard,
+      });
+    } else {
+      await ctx.reply(message, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard,
+      });
+    }
   }
 
   private async handlePremiumPurchase(ctx: BotContext) {
@@ -397,8 +403,13 @@ To'lov qilgandan keyin chekni botga yuboring.
     duration: number,
     botUsername: string,
   ): string {
-    // Payme merchant ID (sizning merchant ID'ingiz)
-    const merchantId = process.env.PAYME_MERCHANT_ID || 'your_merchant_id';
+    // Payme merchant ID from environment
+    const merchantId = process.env.PAYME_MERCHANT_ID || '';
+
+    if (!merchantId) {
+      this.logger.error('PAYME_MERCHANT_ID not configured in .env');
+      return 'https://checkout.paycom.uz';
+    }
 
     // Amount in tiyin (1 so'm = 100 tiyin)
     const amountInTiyin = amount * 100;
@@ -409,7 +420,7 @@ To'lov qilgandan keyin chekni botga yuboring.
         merchant_id: merchantId,
         amount: amountInTiyin,
         account: {
-          user_id: userId,
+          user_id: String(userId),
           duration: duration,
         },
         callback: `https://t.me/${botUsername}`,
@@ -417,7 +428,9 @@ To'lov qilgandan keyin chekni botga yuboring.
       }),
     ).toString('base64');
 
-    return `https://checkout.paycom.uz/${params}`;
+    const paymeEndpoint =
+      process.env.PAYME_ENDPOINT || 'https://checkout.paycom.uz';
+    return `${paymeEndpoint}/${params}`;
   }
 
   // ==================== SETTINGS ====================
@@ -429,7 +442,10 @@ To'lov qilgandan keyin chekni botga yuboring.
   private async showContact(ctx: BotContext) {
     const settings = await this.settingsService.getSettings();
 
-    const message = `
+    // Use custom contact message if set by admin, otherwise use default
+    const message =
+      settings.contactMessage ||
+      `
 📞 **Aloqa**
 
 Savollaringiz bo'lsa murojaat qiling:
@@ -459,6 +475,21 @@ Savollaringiz bo'lsa murojaat qiling:
 
   // ==================== CODE SEARCH ====================
   private async handleCodeSearch(ctx: BotContext, code: number) {
+    if (!ctx.from) return;
+
+    // Check if user exists and premium status
+    const user = await this.userService.findByTelegramId(String(ctx.from.id));
+    if (!user) return;
+
+    const premiumStatus = await this.premiumService.checkPremiumStatus(user.id);
+    const isPremium = premiumStatus.isPremium && !premiumStatus.isExpired;
+
+    // Check subscription first if not premium
+    if (!isPremium) {
+      const hasSubscription = await this.checkSubscription(ctx, code, 'search');
+      if (!hasSubscription) return;
+    }
+
     // Try to find movie
     const movie = await this.movieService.findByCode(String(code));
     if (movie) {
@@ -490,26 +521,23 @@ Savollaringiz bo'lsa murojaat qiling:
       const user = await this.userService.findByTelegramId(String(ctx.from.id));
       if (!user) return;
 
-      // Check premium
-      const premiumStatus = await this.premiumService.checkPremiumStatus(
-        user.id,
-      );
-      const isPremium = premiumStatus.isPremium && !premiumStatus.isExpired;
-
-      // Check subscription if not premium
-      if (!isPremium) {
-        const isSubscribed = await this.checkSubscription(ctx, code, 'movie');
-        if (!isSubscribed) {
-          return;
-        }
-      }
-
       // Send video directly without poster
-      const caption = `
-🎬 **${movie.title}**
-${movie.genre ? `🎭 Janr: ${movie.genre}\n` : ''}${movie.year ? `📅 Yil: ${movie.year}\n` : ''}${movie.imdb ? `⭐️ IMDB: ${movie.imdb}/10\n` : ''}
-🆔 Kod: ${movie.code}
+      const botUsername = (await ctx.api.getMe()).username;
+      const field = await this.fieldService.findOne(movie.fieldId);
+
+      // Show info message before video
+      const infoMessage = `
+╭────────────────────
+├‣  Kino nomi : ${movie.title}
+├‣  Kino kodi: ${movie.code}
+├‣  Qism: 1
+├‣  Janrlari: ${movie.genre || "Noma'lum"}
+├‣  Kanal: ${field?.channelLink || '@' + (field?.name || 'Kanal')}
+╰────────────────────
+▶️ Kinoning to'liq qismini https://t.me/${botUsername}?start=${movie.code} dan tomosha qilishingiz mumkin!
       `.trim();
+
+      await ctx.reply(infoMessage);
 
       if (movie.videoFileId) {
         // Parse video messages if stored as JSON
@@ -517,9 +545,11 @@ ${movie.genre ? `🎭 Janr: ${movie.genre}\n` : ''}${movie.year ? `📅 Yil: ${m
           const videoData = JSON.parse(movie.videoMessageId || '[]');
           if (videoData.length > 0) {
             // Forward from database channel with share button
-            const shareKeyboard = new InlineKeyboard().switchInline(
+            const botUsername = (await ctx.api.getMe()).username;
+            const shareLink = `https://t.me/share/url?url=https://t.me/${botUsername}?start=${movie.code}&text=🎬 ${encodeURIComponent(movie.title)}\n\n📖 Kod: ${movie.code}\n\n👇 Kinoni tomosha qilish uchun bosing:`;
+            const shareKeyboard = new InlineKeyboard().url(
               '📤 Share qilish',
-              `${movie.code}`,
+              shareLink,
             );
 
             for (const video of videoData) {
@@ -537,9 +567,11 @@ ${movie.genre ? `🎭 Janr: ${movie.genre}\n` : ''}${movie.year ? `📅 Yil: ${m
         } catch (error) {
           // If not JSON, send directly with share button
           if (movie.videoFileId) {
-            const shareKeyboard = new InlineKeyboard().switchInline(
+            const botUsername = (await ctx.api.getMe()).username;
+            const shareLink = `https://t.me/share/url?url=https://t.me/${botUsername}?start=${movie.code}&text=🎬 ${encodeURIComponent(movie.title)}\n\n📖 Kod: ${movie.code}\n\n👇 Kinoni tomosha qilish uchun bosing:`;
+            const shareKeyboard = new InlineKeyboard().url(
               '📤 Share qilish',
-              `${movie.code}`,
+              shareLink,
             );
 
             await ctx.replyWithVideo(movie.videoFileId, {
@@ -578,20 +610,6 @@ ${movie.genre ? `🎭 Janr: ${movie.genre}\n` : ''}${movie.year ? `📅 Yil: ${m
 
       const user = await this.userService.findByTelegramId(String(ctx.from.id));
       if (!user) return;
-
-      // Check premium
-      const premiumStatus = await this.premiumService.checkPremiumStatus(
-        user.id,
-      );
-      const isPremium = premiumStatus.isPremium && !premiumStatus.isExpired;
-
-      // Check subscription if not premium
-      if (!isPremium) {
-        const isSubscribed = await this.checkSubscription(ctx, code, 'serial');
-        if (!isSubscribed) {
-          return;
-        }
-      }
 
       // Get episodes
       const episodes = await this.episodeService.findBySerialId(serial.id);
@@ -648,18 +666,50 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
     const unsubscribedChannels = [];
 
     for (const channel of channels) {
+      // External kanallarni tekshirmaymiz
+      if (channel.type === 'EXTERNAL') {
+        continue;
+      }
+
       try {
         const member = await ctx.api.getChatMember(
           channel.channelId,
           ctx.from.id,
         );
 
-        if (
-          member.status !== 'member' &&
-          member.status !== 'administrator' &&
-          member.status !== 'creator'
-        ) {
+        this.logger.debug(
+          `User ${ctx.from.id} status in channel ${channel.channelName}: ${member.status}`,
+        );
+
+        // Check if user is subscribed or has pending join request
+        // For private channels, if user sent join request, let them continue
+        const isSubscribed =
+          member.status === 'member' ||
+          member.status === 'administrator' ||
+          member.status === 'creator' ||
+          (member.status === 'restricted' &&
+            'is_member' in member &&
+            member.is_member);
+
+        // For PRIVATE channels: If user has "left" status but we have pending request record, consider as subscribed
+        const hasPendingRequest =
+          channel.type === 'PRIVATE' && channel.pendingRequests > 0;
+
+        if (!isSubscribed && !hasPendingRequest) {
           unsubscribedChannels.push(channel);
+        } else if (isSubscribed) {
+          // User kanalga a'zo, member count'ni oshiramiz
+          await this.channelService.incrementMemberCount(channel.id);
+
+          // Private kanal uchun pending request'larni kamaytiramiz
+          if (channel.type === 'PRIVATE') {
+            await this.channelService.decrementPendingRequests(channel.id);
+          }
+        } else if (hasPendingRequest) {
+          // User has pending request, let them continue
+          this.logger.log(
+            `User ${ctx.from.id} has pending request for ${channel.channelName}, allowing access`,
+          );
         }
       } catch (error) {
         this.logger.error(
@@ -671,29 +721,28 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
     }
 
     if (unsubscribedChannels.length > 0) {
-      let message =
-        "❌ **Botdan foydalanish uchun kanallarga obuna bo'ling:**\n\n";
+      let message = `❌ Kechirasiz, botimizdan foydalanish uchun ushbu kanallarga obuna bo'lishingiz kerak.
+
+<blockquote>💎 Premium obuna sotib olib, kanallarga obuna bo‘lmasdan foydalanishingiz mumkin.</blockquote>
+`;
 
       const keyboard = new InlineKeyboard();
+
       unsubscribedChannels.forEach((channel, index) => {
-        message += `${index + 1}. ${channel.channelName}\n`;
+        // message += `${index + 1}. ${channel.channelName}\n`;
         keyboard.url(channel.channelName, channel.channelLink).row();
       });
 
-      keyboard.text('✅ Tekshirish', 'check_subscription');
-
-      // Add premium purchase button
-      keyboard.row();
+      keyboard.text('✅ Tekshirish', 'check_subscription').row();
       keyboard.text('💎 Premium sotib olish', 'show_premium');
 
-      // Store content info for later if provided
+      // Kontent kodi bo‘lsa qo‘shib qo‘yamiz
       if (contentCode && contentType) {
-        // You can store this in session/cache for retrieval after subscription
-        message += `\n🎬 Kino kodi: ${contentCode}`;
+        message += `\n🎬 Kino kodi: <b>${contentCode}</b>`;
       }
 
       await ctx.reply(message, {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML', // 🔥 MUHIM
         reply_markup: keyboard,
       });
 
@@ -704,15 +753,153 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
   }
 
   private async handleCheckSubscription(ctx: BotContext) {
-    if (!ctx.callbackQuery) return;
+    if (!ctx.callbackQuery || !ctx.from) return;
 
     await ctx.answerCallbackQuery({ text: 'Tekshirilmoqda...' });
 
-    const isSubscribed = await this.checkSubscription(ctx);
+    // Get all mandatory channels
+    const channels = await this.channelService.findAllMandatory();
+    const channelStatuses = [];
 
-    if (isSubscribed) {
-      await ctx.editMessageText(
-        "✅ Siz barcha kanallarga obuna bo'lgansiz!\n\nEndi kino kodini yuboring.",
+    for (const channel of channels) {
+      if (channel.type === 'EXTERNAL') {
+        channelStatuses.push({
+          channel,
+          status: 'external',
+          subscribed: true,
+        });
+        continue;
+      }
+
+      try {
+        const member = await ctx.api.getChatMember(
+          channel.channelId,
+          ctx.from.id,
+        );
+
+        this.logger.log(
+          `[CheckSubscription] User ${ctx.from.id} status in ${channel.channelName}: ${member.status}`,
+        );
+
+        const isSubscribed =
+          member.status === 'member' ||
+          member.status === 'administrator' ||
+          member.status === 'creator' ||
+          (member.status === 'restricted' &&
+            'is_member' in member &&
+            member.is_member);
+
+        channelStatuses.push({
+          channel,
+          status: member.status,
+          subscribed: isSubscribed,
+        });
+
+        if (isSubscribed) {
+          await this.channelService.incrementMemberCount(channel.id);
+          if (channel.type === 'PRIVATE') {
+            await this.channelService.decrementPendingRequests(channel.id);
+          }
+        }
+      } catch (error) {
+        this.logger.error(
+          `Error checking ${channel.channelName}: ${error.message}`,
+        );
+        channelStatuses.push({
+          channel,
+          status: 'error',
+          subscribed: false,
+        });
+      }
+    }
+
+    // Check if all subscribed
+    const unsubscribed = channelStatuses.filter((cs) => !cs.subscribed);
+
+    if (unsubscribed.length === 0) {
+      try {
+        // Delete the old message
+        await ctx.deleteMessage();
+      } catch (error) {
+        this.logger.warn('Could not delete message:', error);
+      }
+
+      // Send new success message
+      await ctx.reply(
+        "✅ Siz barcha kanallarga obuna bo'lgansiz!\n\nEndi botdan foydalanishingiz mumkin. Kino kodini yuboring.",
+      );
+    } else {
+      // Show detailed status
+      let message = "❌ Quyidagi kanallarga hali obuna bo'lmagansiniz:\n\n";
+
+      const keyboard = new InlineKeyboard();
+
+      unsubscribed.forEach((cs) => {
+        const statusEmoji =
+          cs.status === 'left' ? '🚫' : cs.status === 'kicked' ? '⛔' : '⏳';
+
+        if (cs.status === 'left' && cs.channel.type === 'PRIVATE') {
+          message += `${statusEmoji} ${cs.channel.channelName} - So'rov yuborilmagan yoki rad etilgan\n`;
+        } else if (cs.status === 'left') {
+          message += `${statusEmoji} ${cs.channel.channelName} - Obuna bo'lmagan\n`;
+        } else {
+          message += `${statusEmoji} ${cs.channel.channelName} - Admin tasdiqini kutmoqda\n`;
+        }
+
+        keyboard.url(cs.channel.channelName, cs.channel.channelLink).row();
+      });
+
+      keyboard.text('✅ Tekshirish', 'check_subscription').row();
+      keyboard.text('💎 Premium sotib olish', 'show_premium');
+
+      await ctx.editMessageText(message, {
+        reply_markup: keyboard,
+      });
+    }
+  }
+
+  // ==================== JOIN REQUEST HANDLER ====================
+  // Store join requests in memory to prevent duplicates
+  private joinRequestCache = new Map<string, number>();
+
+  private async handleJoinRequest(ctx: BotContext) {
+    if (!ctx.chatJoinRequest) return;
+
+    const userId = ctx.chatJoinRequest.from.id;
+    const chatId = String(ctx.chatJoinRequest.chat.id);
+    const cacheKey = `${userId}_${chatId}`;
+
+    this.logger.log(`Join request from user ${userId} to channel ${chatId}`);
+
+    // Check if this user already sent a request to this channel recently (within 5 minutes)
+    const lastRequestTime = this.joinRequestCache.get(cacheKey);
+    const now = Date.now();
+
+    if (lastRequestTime && now - lastRequestTime < 5 * 60 * 1000) {
+      this.logger.log(
+        `Duplicate join request from user ${userId} to channel ${chatId}, ignoring`,
+      );
+      return;
+    }
+
+    // Store this request
+    this.joinRequestCache.set(cacheKey, now);
+
+    // Clean up old entries (older than 10 minutes)
+    for (const [key, time] of this.joinRequestCache.entries()) {
+      if (now - time > 10 * 60 * 1000) {
+        this.joinRequestCache.delete(key);
+      }
+    }
+
+    // Find channel and increment pending requests
+    const channel = await this.channelService.findAllMandatory();
+    const matchedChannel = channel.find((ch) => ch.channelId === chatId);
+
+    if (matchedChannel) {
+      await this.channelService.incrementPendingRequests(matchedChannel.id);
+      this.logger.log(
+        `Incremented pending requests for channel ${matchedChannel.channelName}`,
       );
     }
   }
@@ -760,9 +947,11 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
 
       // Send episode video with share button
       const serial = await this.serialService.findById(serialId);
-      const shareKeyboard = new InlineKeyboard().switchInline(
+      const botUsername = (await ctx.api.getMe()).username;
+      const shareLink = `https://t.me/share/url?url=https://t.me/${botUsername}?start=s${serial.code}&text=📺 ${encodeURIComponent(serial.title)}\n\n📊 Qismlar: ${serial.totalEpisodes}\n📖 Kod: ${serial.code}\n\n👇 Serialni tomosha qilish uchun bosing:`;
+      const shareKeyboard = new InlineKeyboard().url(
         '📤 Share qilish',
-        `s${serial.code}`,
+        shareLink,
       );
 
       if (episode.videoFileId) {
@@ -918,10 +1107,16 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
               message_text: `🎬 **${movie.title}**\n\n${movie.description || ''}\n\n🆔 Kod: ${code}\n\n👇 Ko'rish uchun pastdagi tugmani bosing:`,
               parse_mode: 'Markdown',
             },
-            reply_markup: new InlineKeyboard().url(
-              '▶️ Tomosha qilish',
-              shareLink,
-            ),
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '▶️ Tomosha qilish',
+                    url: shareLink,
+                  },
+                ],
+              ],
+            },
           });
         }
       }
@@ -943,10 +1138,16 @@ ${serial.genre ? `🎭 Janr: ${serial.genre}\n` : ''}${serial.description ? `\n�
               message_text: `📺 **${serial.title}**\n\n${serial.description || ''}\n\n📊 Qismlar: ${serial.totalEpisodes}\n🆔 Kod: ${code}\n\n👇 Ko'rish uchun pastdagi tugmani bosing:`,
               parse_mode: 'Markdown',
             },
-            reply_markup: new InlineKeyboard().url(
-              '▶️ Tomosha qilish',
-              shareLink,
-            ),
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '▶️ Tomosha qilish',
+                    url: shareLink,
+                  },
+                ],
+              ],
+            },
           });
         }
       }

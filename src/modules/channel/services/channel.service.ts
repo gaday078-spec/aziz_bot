@@ -36,6 +36,19 @@ export class ChannelService {
     return this.prisma.mandatoryChannel.findMany({
       where: { isActive: true },
       orderBy: { order: 'asc' },
+      select: {
+        id: true,
+        createdAt: true,
+        channelId: true,
+        channelLink: true,
+        isActive: true,
+        type: true,
+        channelName: true,
+        order: true,
+        memberLimit: true,
+        currentMembers: true,
+        pendingRequests: true,
+      },
     });
   }
 
@@ -83,6 +96,19 @@ export class ChannelService {
     return this.prisma.mandatoryChannel.findMany({
       where: { isActive: true },
       orderBy: { order: 'asc' },
+      select: {
+        id: true,
+        createdAt: true,
+        channelId: true,
+        channelLink: true,
+        isActive: true,
+        type: true,
+        channelName: true,
+        order: true,
+        memberLimit: true,
+        currentMembers: true,
+        pendingRequests: true,
+      },
     });
   }
 
@@ -113,6 +139,7 @@ export class ChannelService {
     channelLink: string;
     type: ChannelType;
     isActive?: boolean;
+    memberLimit?: number | null;
   }) {
     return this.prisma.mandatoryChannel.create({
       data: {
@@ -121,7 +148,56 @@ export class ChannelService {
         channelLink: data.channelLink,
         type: data.type,
         isActive: data.isActive ?? true,
+        memberLimit: data.memberLimit,
+        currentMembers: 0,
+        pendingRequests: 0,
         order: 0,
+      },
+    });
+  }
+
+  async incrementMemberCount(channelId: number) {
+    const channel = await this.prisma.mandatoryChannel.findUnique({
+      where: { id: channelId },
+    });
+
+    if (!channel) return null;
+
+    const updated = await this.prisma.mandatoryChannel.update({
+      where: { id: channelId },
+      data: {
+        currentMembers: { increment: 1 },
+      },
+    });
+
+    // Auto-disable if limit reached
+    if (
+      updated.memberLimit !== null &&
+      updated.currentMembers >= updated.memberLimit
+    ) {
+      await this.prisma.mandatoryChannel.update({
+        where: { id: channelId },
+        data: { isActive: false },
+      });
+    }
+
+    return updated;
+  }
+
+  async incrementPendingRequests(channelId: number) {
+    return this.prisma.mandatoryChannel.update({
+      where: { id: channelId },
+      data: {
+        pendingRequests: { increment: 1 },
+      },
+    });
+  }
+
+  async decrementPendingRequests(channelId: number) {
+    return this.prisma.mandatoryChannel.update({
+      where: { id: channelId },
+      data: {
+        pendingRequests: { decrement: 1 },
       },
     });
   }
@@ -183,5 +259,53 @@ export class ChannelService {
     });
 
     return newChannels > 0;
+  }
+
+  // Barcha kanallarni olish (active va inactive)
+  async findAllWithHistory() {
+    return this.prisma.mandatoryChannel.findMany({
+      orderBy: [
+        { isActive: 'desc' }, // Active kanallar birinchi
+        { createdAt: 'desc' }, // Eng yangilar birinchi
+      ],
+      select: {
+        id: true,
+        createdAt: true,
+        channelId: true,
+        channelLink: true,
+        isActive: true,
+        type: true,
+        channelName: true,
+        order: true,
+        memberLimit: true,
+        currentMembers: true,
+        pendingRequests: true,
+      },
+    });
+  }
+
+  // Link bo'yicha kanal qidirish
+  async findByLink(link: string) {
+    return this.prisma.mandatoryChannel.findFirst({
+      where: {
+        channelLink: {
+          contains: link,
+          mode: 'insensitive',
+        },
+      },
+      select: {
+        id: true,
+        createdAt: true,
+        channelId: true,
+        channelLink: true,
+        isActive: true,
+        type: true,
+        channelName: true,
+        order: true,
+        memberLimit: true,
+        currentMembers: true,
+        pendingRequests: true,
+      },
+    });
   }
 }

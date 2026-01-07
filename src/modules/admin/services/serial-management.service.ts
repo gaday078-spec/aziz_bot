@@ -303,13 +303,14 @@ export class SerialManagementService {
       let posterMessageId = 0;
       if (postToField) {
         const caption = `
-${title}
-
-${description || ''}
-
-📖 Qismlar: ${episodes.length}
-🎭 Janrlari: ${genre}
-🔖 Kanal: ${selectedField.channelLink || '@' + selectedField.name}
+╭────────────────────
+├‣  Serial nomi : ${title}
+├‣  Serial kodi: ${code}
+├‣  Qismlar: ${episodes.length}
+├‣  Janrlari: ${genre}
+├‣  Kanal: ${selectedField.channelLink || '@' + selectedField.name}
+╰────────────────────
+▶️ Serialning to'liq qismlarini https://t.me/${this.grammyBot.botUsername}?start=s${code} dan tomosha qilishingiz mumkin!
         `.trim();
 
         const keyboard = new InlineKeyboard().url(
@@ -471,13 +472,14 @@ ${description || ''}
         const field = await this.fieldService.findOne(serial.fieldId);
         if (field) {
           const caption = `
-${serial.title}
-
-${serial.description || ''}
-
-📖 Qismlar: ${allEpisodes.length}
-🎭 Janrlari: ${serial.genre}
-🔖 Kanal: ${field.channelLink || '@' + field.name}
+╭────────────────────
+├‣  Serial nomi : ${serial.title}
+├‣  Serial kodi: ${serial.code}
+├‣  Qismlar: ${allEpisodes.length}
+├‣  Janrlari: ${serial.genre}
+├‣  Kanal: ${field.channelLink || '@' + field.name}
+╰────────────────────
+▶️ Serialning to'liq qismlarini https://t.me/${this.grammyBot.botUsername}?start=s${serial.code} dan tomosha qilishingiz mumkin!
           `.trim();
 
           const keyboard = new InlineKeyboard().url(
